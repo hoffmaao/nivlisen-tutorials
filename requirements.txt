@@ -1,0 +1,15 @@
+# Python dependencies layered on top of a Firedrake + icepack environment
+# (Firedrake / PETSc / pyadjoint / icepack come from the Docker base image or
+# your existing Firedrake venv — see README.md).
+xarray
+netCDF4
+rasterio
+geopandas
+shapely
+gmsh
+scipy
+colorcet
+matplotlib
+jupyterlab
+nbconvert
+ipympl
