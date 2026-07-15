@@ -29,10 +29,10 @@
 # In this notebook we:
 #
 # 1. load the gridded observations (bed, thickness, surface, velocity),
-# 2. look at the region,
-# 3. carve out the **ice-only domain**, drawing a proper **calving front**, and
-# 4. build a coarse triangular **mesh** with its boundary split into the parts
-#    where ice flows *in* and the part that faces the *ocean*.
+# 2. look at the region and the pre-carved **ice-only domain**, and
+# 3. build an **adaptive mesh**, refined where the ice deforms hardest, with its
+#    boundary split into the parts where ice flows *in* and the part that faces
+#    the *ocean* (the **calving front**).
 #
 # Everything runs at low resolution so it finishes in a minute or two.
 
@@ -57,6 +57,7 @@ import nivlisen_tutorial as nt
 
 DATA = "../data/nivlisen_data.nc"
 DOMAIN = "../data/nivlisen_domain.gpkg"
+ICE_DOMAIN = "../data/nivlisen_ice_domain.gpkg"
 MESH_OUT = "../mesh/nivlisen_tutorial.msh"
 os.makedirs("../mesh", exist_ok=True)
 
@@ -75,27 +76,36 @@ os.makedirs("../mesh", exist_ok=True)
 # The full mosaics are many gigabytes; the committed file is the small piece
 # clipped to Nivlisen (see `data/prepare_data.py` for exactly how it was made),
 # so you never need the originals or any data credentials.
+#
+# We also load the **ice-only domain** — the outline of where there actually
+# *is* ice, with a clean calving front — pre-carved and saved to
+# `nivlisen_ice_domain.gpkg` (made once by subtracting the open ocean from the
+# buffered production outline; we load the finished boundary rather than
+# re-derive it here). The buffered `domain` is still loaded because the mesher
+# uses it to tell the **inflow** boundary from the **calving front**.
 
 # %%
 ds = nt.load_data(DATA)
 domain, basin, neighbours = nt.load_domain(DOMAIN)
+ice = nt.load_ice_domain(ICE_DOMAIN)        # pre-carved ice-only domain
 
 speed = np.hypot(ds["vx"], ds["vy"])
 print("grid:", dict(ds.sizes), " spacing:", ds.attrs["grid_spacing_m"], "m")
 print(f"observed speed: {float(speed.min()):.0f} – {float(speed.max()):.0f} m/yr")
+print(f"ice domain area: {ice.area/1e6:,.0f} km²")
 
 # %% [markdown]
 # ## A look at the region
 #
 # The catchment is a long, narrow grounded basin (south) that widens into the
-# floating shelf (north). The black outline is the **buffered domain** from the
-# production study — the basin plus the shelf, extended a few km into the ocean.
+# floating shelf (north). The black outline is the **ice domain** we model — its
+# northern edge is the calving front.
 
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(12, 8), sharey=True)
 
 xkm, ykm = ds["x"].values / 1e3, ds["y"].values / 1e3
-gx, gy = np.array(domain.exterior.xy[0]) / 1e3, np.array(domain.exterior.xy[1]) / 1e3
+gx, gy = np.array(ice.exterior.xy[0]) / 1e3, np.array(ice.exterior.xy[1]) / 1e3
 
 im0 = axes[0].pcolormesh(xkm, ykm, ds["surface"], cmap="terrain", shading="auto")
 axes[0].set_title("surface elevation (m)")
@@ -120,42 +130,6 @@ plt.show()
 # map (right); the slow interior of the catchment is nearly stagnant. This is the
 # velocity field we will try to reproduce by inverting for the friction and
 # fluidity.
-
-# %% [markdown]
-# ## Carving the ice-only domain and the calving front
-#
-# The production study used icepack2, which can cope with the ice thickness
-# going to zero, so its mesh was *buffered* a few km into the open ocean. Here we
-# use the **primal** SSA model, which needs a positive thickness everywhere — so
-# we must trim the domain back to where there actually *is* ice.
-#
-# `nt.ice_extent` does this by **subtracting the open ocean** (BedMachine
-# `mask == 0`) from the buffered domain. The new boundary appears only along the
-# seaward edge — that is the **calving front**. Every other boundary (the ice
-# divides we share with neighbouring catchments, the interior cut, and any
-# inland rock) is inherited unchanged from the smooth basin-shapefile outline.
-# (Subtracting ocean, rather than intersecting with the ice mask, matters: it
-# keeps the inland boundary smooth instead of chasing every ragged gap in the
-# ice raster.)
-
-# %%
-ice = nt.ice_extent(ds, domain)
-print(f"ice domain area: {ice.area/1e6:,.0f} km²  "
-      f"(buffered was {domain.area/1e6:,.0f} km²)")
-
-fig, ax = plt.subplots(figsize=(6, 8))
-ax.plot(*np.array(domain.exterior.xy)/1e3, "0.6", lw=1.2, ls="--",
-        label="buffered domain (into ocean)")
-ax.plot(*np.array(ice.exterior.xy)/1e3, "C3", lw=1.8, label="ice domain (calving front)")
-ax.set_aspect("equal"); ax.legend(loc="lower left")
-ax.set_xlabel("x (km)"); ax.set_ylabel("y (km)")
-ax.set_title("Trimming the ocean buffer back to the ice front")
-plt.show()
-
-# %% [markdown]
-# The red outline sits on top of the grey dashed one everywhere except along the
-# **northern shelf front**, where it pulls back out of the ocean. That seaward
-# arc is the calving front; the rest is inflow boundary.
 
 # %% [markdown]
 # ## Building an adaptive mesh

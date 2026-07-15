@@ -14,7 +14,7 @@ self-contained, and runnable at low resolution in a few minutes on a laptop.
 
 | Notebook | What it does |
 |---|---|
-| [`00-domain.ipynb`](notebooks/00-domain.ipynb) | Introduces the region, loads the gridded data (bed, thickness, velocity), carves the ice-only domain with a delineated **calving front**, and builds + plots an **adaptive mesh** refined toward high effective stress and strain rate. |
+| [`00-domain.ipynb`](notebooks/00-domain.ipynb) | Introduces the region, loads the gridded data (bed, thickness, velocity) and the pre-carved ice-only domain, and builds + plots an **adaptive mesh** refined by effective stress and strain rate. |
 | [`01-inversion.ipynb`](notebooks/01-inversion.ipynb) | Sets up the icepack shallow-stream (SSA) model with a water-pressure flotation friction law, then inverts for log-friction θ and log-fluidity φ with icepack's `StatisticsProblem` (Recinos-2023-style σ-weighted misfit + Whittle–Matérn prior). |
 | [`02-uncertainty.ipynb`](notebooks/02-uncertainty.ipynb) | Computes the posterior uncertainty by a matrix-free eigendecomposition of the prior-preconditioned Gauss–Newton Hessian — Hessian–vector products via `firedrake.adjoint` (fenics_ice / Recinos UQ framework). |
 | [`03-melt-flux.ipynb`](notebooks/03-melt-flux.ipynb) | Uses the calibrated model to map the **grounding-zone-flux sensitivity to surface melt**: the adjoint gives ∂(GL&nbsp;flux)/∂thinning, **Fill–Spill–Merge** routes surface meltwater down the surface, and composing them shows how much the discharge responds to melt anywhere — routed vs. thinning-in-place. |
@@ -30,7 +30,8 @@ nivlisen-tutorials/
 ├── README.md               this file
 ├── data/
 │   ├── nivlisen_data.nc     small clipped low-res grid (bed/thickness/vel/…)
-│   ├── nivlisen_domain.gpkg domain & basin outlines
+│   ├── nivlisen_domain.gpkg buffered domain & basin outlines
+│   ├── nivlisen_ice_domain.gpkg  pre-carved ice-only domain (calving front)
 │   └── prepare_data.py      (author-side) how the small data were made
 ├── src/nivlisen_tutorial.py shared helpers (data, mesh, prior, model, plots)
 ├── fsm/fsm_wrapper.cpp      Fill-Spill-Merge meltwater routing (compiled into the image)

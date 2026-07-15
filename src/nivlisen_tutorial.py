@@ -45,6 +45,16 @@ def load_domain(path="../data/nivlisen_domain.gpkg"):
     return layer("domain"), layer("basin"), layer("neighbours")
 
 
+def load_ice_domain(path="../data/nivlisen_ice_domain.gpkg"):
+    """Load the pre-carved ice-only domain polygon (EPSG:3031).
+
+    This is the :func:`ice_extent` result saved to disk, so the notebooks load a
+    clean ice boundary (with the calving front already delineated) directly,
+    instead of re-deriving it from the raster each time."""
+    import geopandas as gpd
+    return gpd.read_file(path).geometry.values[0]
+
+
 def ice_extent(ds, buffered_domain, simplify_m=2000.0):
     r"""Carve the **ice-only** domain out of the buffered production region.
 
