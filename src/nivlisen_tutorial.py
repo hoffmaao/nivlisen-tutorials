@@ -84,8 +84,14 @@ def ice_extent(ds, buffered_domain, simplify_m=2000.0):
 
 
 def build_mesh(ice_domain, resolution_m, out_path, buffered_domain,
-               inflow_tol=3000.0):
-    r"""Mesh ``ice_domain`` at ``resolution_m`` with a delineated calving front.
+               inflow_tol=3000.0, size_field=None):
+    r"""Mesh ``ice_domain`` with a delineated calving front.
+
+    ``resolution_m`` sets a uniform target element size. Pass ``size_field`` — a
+    callable ``(x, y) -> target size (m)`` — for an **adaptive** mesh: the
+    boundary is resampled at the local target spacing and gmsh's size callback
+    drives the *interior* to the same field, so elements shrink where the field
+    is small (e.g. high stress / strain rate) and grow where it is large.
 
     Boundary segments are classified into two physical groups:
 
@@ -104,18 +110,24 @@ def build_mesh(ice_domain, resolution_m, out_path, buffered_domain,
     import gmsh
     from shapely.geometry import Point
 
-    # Resample the boundary ring uniformly at ~resolution_m. This keeps the
-    # smooth shape (notably the production inland boundary) but decimates its
-    # dense vertices, so the mesh is ~resolution_m everywhere instead of being
-    # pinned fine wherever the input outline happened to be densely sampled.
+    sz = size_field if size_field is not None else (lambda x, y: resolution_m)
+
+    # Walk the boundary ring, placing a node every local ``sz`` metres — uniform
+    # when ``sz`` is constant, finer where the size field is small. This decimates
+    # the densely-sampled input outline while honouring the target spacing.
     ring = np.asarray(ice_domain.exterior.coords)          # closed (last == first)
     seglen = np.hypot(*np.diff(ring, axis=0).T)
     cum = np.concatenate([[0.0], np.cumsum(seglen)])
     total = float(cum[-1])
-    n_nodes = max(8, int(round(total / resolution_m)))
-    targets = np.linspace(0.0, total, n_nodes, endpoint=False)
-    dense = np.column_stack([np.interp(targets, cum, ring[:, 0]),
-                             np.interp(targets, cum, ring[:, 1])])
+    xs, ys, s = [], [], 0.0
+    while s < total:
+        x = float(np.interp(s, cum, ring[:, 0]))
+        y = float(np.interp(s, cum, ring[:, 1]))
+        xs.append(x); ys.append(y)
+        s += max(sz(x, y), 1.0)
+    dense = np.column_stack([xs, ys])
+    if len(dense) > 8 and np.hypot(*(dense[-1] - dense[0])) < 0.5 * sz(*dense[0]):
+        dense = dense[:-1]                                  # drop node collapsed onto the start
 
     bdy = buffered_domain.boundary
     mids = 0.5 * (dense + np.roll(dense, -1, axis=0))
@@ -125,7 +137,7 @@ def build_mesh(ice_domain, resolution_m, out_path, buffered_domain,
     gmsh.initialize()
     gmsh.option.setNumber("General.Verbosity", 1)
     gmsh.model.add("nivlisen")
-    pts = [gmsh.model.geo.addPoint(x, y, 0, resolution_m) for x, y in dense]
+    pts = [gmsh.model.geo.addPoint(x, y, 0, sz(x, y)) for x, y in dense]
     lines, inflow_lines, calving_lines = [], [], []
     for i in range(len(pts)):
         ln = gmsh.model.geo.addLine(pts[i], pts[(i + 1) % len(pts)])
@@ -138,6 +150,11 @@ def build_mesh(ice_domain, resolution_m, out_path, buffered_domain,
     gmsh.model.geo.addPhysicalGroup(1, calving_lines, tag=2, name="calving")
     gmsh.model.geo.addPhysicalGroup(2, [surf], tag=3, name="ice")
     gmsh.model.geo.synchronize()
+    if size_field is not None:
+        # drive interior element size from the field, not just the boundary nodes
+        gmsh.model.mesh.setSizeCallback(lambda dim, tag, x, y, z, lc: sz(x, y))
+        gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
     gmsh.model.mesh.generate(2)
     gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
     gmsh.write(out_path)
@@ -259,10 +276,14 @@ def prior_bilinear(trial, test, delta, ell):
 # Plotting
 # ─────────────────────────────────────────────────────────────────────────
 
-def plot_field(f, ax, **kw):
-    """tripcolor a field with a thin boundary outline; returns the collection."""
+def plot_field(f, ax, show_mesh=False, **kw):
+    """tripcolor a field with a thin boundary outline; returns the collection.
+
+    With ``show_mesh=True`` the mesh is overlaid as faint transparent triangles."""
     coll = fd.tripcolor(f, axes=ax, **kw)
-    fd.triplot(f.function_space().mesh(), axes=ax, interior_kw={"linewidth": 0},
+    interior_kw = ({"linewidth": 0.15, "color": "k", "alpha": 0.25} if show_mesh
+                   else {"linewidth": 0})
+    fd.triplot(f.function_space().mesh(), axes=ax, interior_kw=interior_kw,
                boundary_kw={"linewidth": 0.8, "color": "k"})
     _km_axes(ax)
     return coll
@@ -284,3 +305,95 @@ def _km_axes(ax):
     ax.yaxis.set_major_formatter(km)
     ax.set_xlabel("x (km, EPSG:3031)")
     ax.set_ylabel("y (km, EPSG:3031)")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Grounding-zone flux + surface-melt routing (notebook 03)
+# ─────────────────────────────────────────────────────────────────────────
+
+# m³ of ice per year → Gt per year (ρ_ice = 917 kg/m³).
+ICE_TO_GT = 917.0 / 1e12
+
+
+def grounding_line_gate(h, s, Q, length=4000.0):
+    r"""Smooth 0/1 grounded indicator whose gradient marks the grounding line.
+
+    The grounding-zone flux is evaluated with the divergence trick
+    :math:`Q_{GL}=\int h\,\mathbf u\cdot\nabla\chi\,dx`: for a grounded indicator
+    :math:`\chi` (1 grounded, 0 floating), :math:`\nabla\chi` is a narrow ridge
+    on the flotation contour, so the integral collects :math:`h\,\mathbf u\cdot
+    \hat n` across the grounding line (no explicit contour tracing needed). We
+    take the smooth flotation fraction (:func:`flotation_factor`), Helmholtz-
+    smooth it over ``length`` metres so the ridge is a clean band rather than a
+    mesh staircase, and threshold at 0.5. Returns a ``Q`` Function."""
+    phi_g = Function(Q).interpolate(flotation_factor(h, s))
+    L = Constant(float(length))
+    chi, w, t = Function(Q), fd.TestFunction(Q), fd.TrialFunction(Q)
+    fd.solve((t * w + L * L * inner(grad(t), grad(w))) * dx == phi_g * w * dx, chi)
+    return Function(Q, name="gl_gate").interpolate(conditional(chi > 0.5, 1.0, 0.0))
+
+
+def grounding_zone_flux(u, h, gate):
+    r"""Signed grounding-zone flux :math:`\int h\,\mathbf u\cdot\nabla\chi\,dx`
+    (m³/yr) for velocity ``u``, thickness ``h`` and a gate ``chi`` from
+    :func:`grounding_line_gate`. Left as an ``assemble`` (not floored to a
+    Python float) so it tapes under ``firedrake.adjoint`` for the sensitivity;
+    scale by :data:`ICE_TO_GT` for Gt/yr."""
+    return fd.assemble(h * inner(u, grad(gate)) * dx)
+
+
+def routing_grid(fe_coords, field, ice_polygon, res=2000.0):
+    r"""Rasterise a nodal ``field`` onto a regular ``res``-metre grid for
+    routing. Cells outside ``ice_polygon`` become **OCEAN** drains (-9999),
+    so surface water leaving the ice exits at the true margin (not the mesh's
+    convex hull). Returns ``(grid, xs, ys, inside)`` — the field on ice and
+    -9999 off it, the axes, and the boolean ice mask, all shaped ``(ny, nx)``."""
+    from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+    from matplotlib.path import Path
+    x0, x1 = fe_coords[:, 0].min(), fe_coords[:, 0].max()
+    y0, y1 = fe_coords[:, 1].min(), fe_coords[:, 1].max()
+    xs, ys = np.arange(x0, x1 + res, res), np.arange(y0, y1 + res, res)
+    gx, gy = np.meshgrid(xs, ys)
+    inside = Path(np.asarray(ice_polygon.exterior.coords)).contains_points(
+        np.column_stack([gx.ravel(), gy.ravel()])).reshape(gx.shape)
+    g = LinearNDInterpolator(fe_coords, field)(gx, gy)
+    g = np.where(np.isnan(g), NearestNDInterpolator(fe_coords, field)(gx, gy), g)
+    return np.where(inside, g, -9999.0), xs, ys, inside
+
+
+def route_fsm(dem, water_in, fsm_bin="fsm_wrapper"):
+    r"""Route ``water_in`` (m of water per cell) downslope over ``dem`` (m;
+    NaN or < -9990 is an OCEAN drain) with the compiled Fill-Spill-Merge binary
+    (Barnes et al., 2020). Returns the routed standing-water depth ``(ny, nx)``.
+    Arrays are exchanged as raw ``(ny, nx)`` C-order float64 — the wrapper's
+    contract; the binary is on ``PATH`` in the Docker image."""
+    import subprocess, tempfile, shutil
+    binpath = shutil.which(fsm_bin) or fsm_bin
+    ny, nx = dem.shape
+    with tempfile.TemporaryDirectory() as td:
+        d, wi, wo = f"{td}/dem.bin", f"{td}/win.bin", f"{td}/wout.bin"
+        np.ascontiguousarray(dem, dtype="<f8").tofile(d)
+        np.ascontiguousarray(water_in, dtype="<f8").tofile(wi)
+        subprocess.run([binpath, str(ny), str(nx), d, wi, wo],
+                       check=True, capture_output=True)
+        return np.fromfile(wo, dtype="<f8").reshape(ny, nx)
+
+
+def grid_node_map(xs, ys, fe_coords):
+    r"""Nearest mesh node for each grid cell (a Voronoi assignment). Compute
+    once and reuse across many routings. Returns an ``(ny, nx)`` int array."""
+    from scipy.spatial import cKDTree
+    gx, gy = np.meshgrid(xs, ys)
+    return cKDTree(fe_coords).query(
+        np.column_stack([gx.ravel(), gy.ravel()]))[1].reshape(gx.shape)
+
+
+def grid_to_nodes(grid_field, nn, inside, n_nodes, res):
+    r"""Mass-conservingly average a per-cell grid field (m ice-equivalent) onto
+    the mesh nodes: each ice cell is credited to its nearest node (``nn`` from
+    :func:`grid_node_map`), and the node value is the area-weighted mean over
+    the cells it owns. Returns an ``(n_nodes,)`` array."""
+    idx = nn[inside].ravel()
+    ncells = np.bincount(idx, minlength=n_nodes)
+    total = np.bincount(idx, weights=grid_field[inside].ravel(), minlength=n_nodes)
+    return np.where(ncells > 0, total / np.maximum(ncells, 1), 0.0)

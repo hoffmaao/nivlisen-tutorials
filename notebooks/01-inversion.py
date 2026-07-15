@@ -182,7 +182,7 @@ def regularization(controls):
 # `MaximumProbabilityEstimator` then drives the cost downhill from
 # $\theta=\varphi=0$ using a Newton/BFGS optimiser, getting the gradient by the
 # adjoint method (one extra solve per iteration, *regardless* of how many DOFs).
-# On this coarse mesh a few dozen iterations is plenty.
+# Here we allow up to 300 iterations so the optimiser can converge properly.
 
 # %%
 theta = Function(Q, name="log_friction")
@@ -195,7 +195,7 @@ problem = StatisticsProblem(
     controls=[theta, phi],
 )
 estimator = MaximumProbabilityEstimator(
-    problem, gradient_tolerance=1e-4, step_tolerance=1e-2, max_iterations=40,
+    problem, gradient_tolerance=1e-4, step_tolerance=1e-2, max_iterations=300,
 )
 theta, phi = estimator.solve()
 

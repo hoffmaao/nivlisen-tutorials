@@ -158,7 +158,7 @@ plt.show()
 # arc is the calving front; the rest is inflow boundary.
 
 # %% [markdown]
-# ## Building the mesh
+# ## Building an adaptive mesh
 #
 # `nt.build_mesh` triangulates the ice domain and — importantly — splits its
 # boundary into two physical groups, returning their tags:
@@ -170,19 +170,77 @@ plt.show()
 #   ice/ocean back-pressure (the *terminus* condition).
 #
 # A boundary segment is "inflow" if it lies on the buffered outline and
-# "calving" otherwise. The production project uses an *adaptive* mesh (fine near
-# the grounding line and front); a uniform coarse mesh keeps this tutorial fast
-# and is plenty to illustrate the method. Increase `RESOLUTION_M` for an even
-# faster run, decrease it for more detail.
+# "calving" otherwise.
+#
+# Rather than a uniform mesh, we **spend resolution where the ice is working
+# hardest**. From the observed velocity we form the effective strain rate
+# $\dot\varepsilon_e=\sqrt{\dot\varepsilon_{xx}^2+\dot\varepsilon_{yy}^2+
+# \dot\varepsilon_{xx}\dot\varepsilon_{yy}+\dot\varepsilon_{xy}^2}$ and, through
+# Glen's flow law, the effective stress $\tau_e=(\dot\varepsilon_e/A)^{1/n}$.
+# Where either is large — the shear margins, the grounding line, the fast trunk
+# — we shrink the target element size toward `FINE`, coarsening to `COARSE` in
+# the near-stagnant interior. This follows the production study's
+# strain-rate-driven refinement.
 
 # %%
-RESOLUTION_M = 5000.0   # 5 km elements — coarse and fast
+from scipy.interpolate import RegularGridInterpolator
+import icepack
 
-ids = nt.build_mesh(ice, RESOLUTION_M, MESH_OUT, domain)
+x, y = ds["x"].values, ds["y"].values
+vx, vy = np.nan_to_num(ds["vx"].values), np.nan_to_num(ds["vy"].values)
+
+# strain-rate tensor from the observed velocity (np.gradient uses the coordinates)
+dvx_dy, dvx_dx = np.gradient(vx, y, x)
+dvy_dy, dvy_dx = np.gradient(vy, y, x)
+exx, eyy, exy = dvx_dx, dvy_dy, 0.5 * (dvx_dy + dvy_dx)
+eps_e = np.sqrt(exx**2 + eyy**2 + exx * eyy + exy**2)      # effective strain rate (1/yr)
+A0, n = float(icepack.rate_factor(fd.Constant(260.0))), 3.0
+tau_e = (np.maximum(eps_e, 1e-12) / A0) ** (1.0 / n)       # effective stress (Glen's law)
+
+# combined refinement metric — normalised on the moving ice so both stress and
+# strain rate contribute — then a target element size, fine where deformation is
+# highest and coarse where the ice is near-stagnant.
+speed = np.hypot(vx, vy)
+moving = speed > 1.0
+refine = eps_e / np.percentile(eps_e[moving], 60) + tau_e / np.percentile(tau_e[moving], 60)
+r_hi = np.percentile(refine[moving], 90)
+
+FINE, COARSE = 2500.0, 7000.0                             # target element sizes (m)
+size_grid = np.clip(FINE * r_hi / np.maximum(refine, 1e-6), FINE, COARSE)
+size_grid[~moving] = COARSE
+
+# a callable size field for the mesher (RegularGridInterpolator wants ascending y)
+yy, gg = (y[::-1], size_grid[::-1]) if y[0] > y[-1] else (y, size_grid)
+_size = RegularGridInterpolator((yy, x), gg, bounds_error=False, fill_value=COARSE)
+def size_field(px, py):
+    return float(_size([[py, px]])[0])
+
+# %% [markdown]
+# The deformation metric (left; brightest at the shear margins and fast trunk)
+# and the resulting target element size (right) — the mesher follows the latter.
+
+# %%
+fig, axes = plt.subplots(1, 2, figsize=(12, 8), sharey=True)
+im0 = axes[0].pcolormesh(x/1e3, y/1e3, np.where(moving, refine, np.nan), cmap="magma",
+                         vmax=float(np.percentile(refine[moving], 98)), shading="auto")
+axes[0].set_title("deformation metric (stress + strain rate)")
+fig.colorbar(im0, ax=axes[0], shrink=0.7)
+im1 = axes[1].pcolormesh(x/1e3, y/1e3, size_grid/1e3, cmap="viridis_r", shading="auto")
+axes[1].set_title("target element size (km)")
+fig.colorbar(im1, ax=axes[1], shrink=0.7)
+for ax in axes:
+    ax.plot(*np.array(ice.exterior.xy)/1e3, "w-", lw=1.0)
+    ax.set_aspect("equal"); ax.set_xlabel("x (km)")
+axes[0].set_ylabel("y (km)")
+fig.tight_layout(); plt.show()
+
+# %%
+ids = nt.build_mesh(ice, FINE, MESH_OUT, domain, size_field=size_field)
 print("boundary tags:", ids)
 
 mesh = fd.Mesh(MESH_OUT)
-print(f"mesh: {mesh.num_vertices()} vertices, {mesh.num_cells()} cells")
+print(f"adaptive mesh: {mesh.num_vertices()} vertices, {mesh.num_cells()} cells "
+      f"(target {FINE/1e3:.1f}–{COARSE/1e3:.0f} km)")
 
 # length of each boundary group, as a sanity check
 from firedrake import Constant, assemble, ds as ds_meas
@@ -193,7 +251,7 @@ for name, tag in [("inflow", ids["inflow"][0]), ("calving", ids["calving"][0])]:
 # %%
 fig, ax = plt.subplots(figsize=(6, 8))
 nt.plot_mesh(mesh, ax)
-ax.set_title(f"Tutorial mesh ({mesh.num_cells()} cells, ~{RESOLUTION_M/1e3:.0f} km)")
+ax.set_title(f"Adaptive mesh ({mesh.num_cells()} cells, {FINE/1e3:.1f}–{COARSE/1e3:.0f} km)")
 plt.show()
 
 # %% [markdown]

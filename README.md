@@ -3,7 +3,9 @@
 A short, self-contained series of Jupyter notebooks that infer the basal
 **friction** and ice **fluidity** of the Nivlisen ice shelf and its grounded
 catchment (Dronning Maud Land, East Antarctica) from observed surface
-velocities, and then quantify the **uncertainty** of that estimate.
+velocities, quantify the **uncertainty** of that estimate, and then use the
+calibrated model to map how **surface melt** would change the **grounding-zone
+flux**.
 
 They are a teaching translation of a production study
 ([`~/projects/nivlisen`](../nivlisen)) into the style of the
@@ -15,6 +17,8 @@ self-contained, and runnable at low resolution in a few minutes on a laptop.
 | [`00-domain.ipynb`](notebooks/00-domain.ipynb) | Introduces the region, loads the gridded data (bed, thickness, velocity), carves the ice-only domain with a delineated **calving front**, and builds + plots a coarse mesh. |
 | [`01-inversion.ipynb`](notebooks/01-inversion.ipynb) | Sets up the icepack shallow-stream (SSA) model with a water-pressure flotation friction law, then inverts for log-friction θ and log-fluidity φ with icepack's `StatisticsProblem` (Recinos-2023-style σ-weighted misfit + Whittle–Matérn prior). |
 | [`02-uncertainty.ipynb`](notebooks/02-uncertainty.ipynb) | Computes the posterior uncertainty by a matrix-free eigendecomposition of the prior-preconditioned Gauss–Newton Hessian — Hessian–vector products via `firedrake.adjoint` (fenics_ice / Recinos UQ framework). |
+| [`03-melt-flux.ipynb`](notebooks/03-melt-flux.ipynb) | Uses the calibrated model to map the **grounding-zone-flux sensitivity to surface melt**: the adjoint gives ∂(GL&nbsp;flux)/∂thinning, **Fill–Spill–Merge** routes surface meltwater down the surface, and composing them shows how much the discharge responds to melt anywhere — routed vs. thinning-in-place. |
+| [`04-figures.ipynb`](notebooks/04-figures.ipynb) | Pure **visualisation** layer: reloads the saved `output/*.h5` results and renders poster-ready figures (300&nbsp;dpi PNG + vector PDF) into `output/figures/`. Recomputes nothing. |
 
 The science (cost function, friction law, prior, UQ) is explained in the
 notebooks; reusable plumbing lives in [`src/nivlisen_tutorial.py`](src/nivlisen_tutorial.py).
@@ -29,8 +33,9 @@ nivlisen-tutorials/
 │   ├── nivlisen_domain.gpkg domain & basin outlines
 │   └── prepare_data.py      (author-side) how the small data were made
 ├── src/nivlisen_tutorial.py shared helpers (data, mesh, prior, model, plots)
+├── fsm/fsm_wrapper.cpp      Fill-Spill-Merge meltwater routing (compiled into the image)
 ├── mesh/                    meshes written by notebook 00
-└── notebooks/               00-domain, 01-inversion, 02-uncertainty
+└── notebooks/               00-domain, 01-inversion, 02-uncertainty, 03-melt-flux, 04-figures
 ```
 
 The committed dataset (~0.35 MB) is already clipped and subsampled, so you do
