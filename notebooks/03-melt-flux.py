@@ -155,8 +155,9 @@ domain, basin, neighbours = nt.load_domain("../data/nivlisen_domain.gpkg")
 ice_poly = nt.ice_extent(ds, domain)
 
 fe_coords = Function(V).interpolate(mesh.coordinates).dat.data_ro
-RES = 2000.0
-dem, xs, ys, inside = nt.routing_grid(fe_coords, np.asarray(s.dat.data_ro), ice_poly, res=RES)
+RES = 200.0
+dem, xs, ys, inside = nt.routing_grid_rema(
+    "../data/nivlisen_surface_rema_200m.tif", fe_coords, ice_poly)
 nn = nt.grid_node_map(xs, ys, fe_coords)             # cell → nearest node (precomputed once)
 print(f"routing grid {dem.shape} @ {RES:.0f} m, {int(inside.sum())} ice cells")
 
@@ -194,15 +195,16 @@ fig.tight_layout(); plt.show()
 N = Q.dim()
 sens_routed = np.zeros(N)
 t0 = time.time()
-for k in range(N):
-    win_k = np.where((nn == k) & inside, 1.0, 0.0)
-    if win_k.sum() == 0:                              # node owns no grid cell
-        continue
-    wout_k = nt.route_fsm(dem, win_k)
-    redist_k = nt.grid_to_nodes(np.where(inside, wout_k - win_k, 0.0), nn, inside, N, RES)
-    sens_routed[k] = -nt.ICE_TO_GT * float(np.dot(g_raw, redist_k))
-    if (k + 1) % 400 == 0:
-        print(f"  routed {k+1}/{N} nodes ({time.time()-t0:.0f}s)")
+with nt.FSMRouter(dem) as router:
+    for k in range(N):
+        win_k = np.where((nn == k) & inside, 1.0, 0.0)
+        if win_k.sum() == 0:                          # node owns no grid cell
+            continue
+        wout_k = router.route(win_k)
+        redist_k = nt.grid_to_nodes(np.where(inside, wout_k - win_k, 0.0), nn, inside, N)
+        sens_routed[k] = -nt.ICE_TO_GT * float(np.dot(g_raw, redist_k))
+        if (k + 1) % 400 == 0:
+            print(f"  routed {k+1}/{N} nodes ({time.time()-t0:.0f}s)")
 sens_unrouted = g_raw * nt.ICE_TO_GT                  # melt thins in place
 print(f"routed map done in {time.time()-t0:.0f}s")
 
