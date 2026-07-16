@@ -14,21 +14,29 @@ Run (only needed to regenerate the committed data):
 Outputs (committed to the repo):
     data/nivlisen_data.nc   x, y, bed, thickness, surface, mask, vx, vy, errx, erry
     data/nivlisen_domain.gpkg   domain / basin / neighbour polygons (EPSG:3031)
+    data/nivlisen_surface_rema_200m.tif   REMA surface elevation, 200 m (routing)
+
+The REMA surface is fetched separately (it only needs the committed domain
+outline and public internet, not the source mosaics):
+    python data/prepare_data.py rema
 
 Provenance:
     BedMachine Antarctica v4 (NSIDC-0756) — bed, thickness, mask
     MEaSUREs Antarctic Ice Velocity 450 m v2 (NSIDC-0484) — VX, VY, ERRX, ERRY
     MEaSUREs Antarctic Boundaries v2 (NSIDC-0709) — Nivl drainage basin
+    REMA Mosaic v2.0 (PGC) — surface elevation for supraglacial meltwater routing
 """
 
 import os
+import sys
 import glob
 import shutil
 import numpy as np
 import xarray as xr
 import geopandas as gpd
 
-# Source production project (only needed when regenerating).
+# Source production project (only needed when regenerating the BedMachine /
+# velocity clip; the REMA step below does not need it).
 SRC = os.path.expanduser("~/projects/nivlisen")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -37,6 +45,78 @@ PAD_M = 8.0e3          # padding around the domain bounds
 
 # Physical constants for the (hydrostatic) surface, matching the inversion.
 RHO_I, RHO_W = 917.0, 1024.0
+
+# --- REMA surface for meltwater routing --------------------------------------
+# The melt-sensitivity notebook routes supraglacial water down the *observed*
+# ice surface, which needs real topography at a finer grid than the 2 km
+# (hydrostatic) model surface. We pull the REMA Mosaic v2.0 (Howat et al.,
+# public on the PGC AWS open-data bucket, no login), clip it to the Nivlisen
+# domain, and resample to 200 m. The mosaic is served as a virtual raster of
+# Cloud-Optimised GeoTIFFs in EPSG:3031 (same projection as everything else),
+# so a single windowed, decimated read fetches only the tiles we need.
+REMA_VRT = ("/vsicurl/https://pgc-opendata-dems.s3.us-west-2.amazonaws.com/"
+            "rema/mosaics/v2.0/32m_dem_tiles.vrt")
+RES_REMA = 200.0       # routing-grid spacing for the REMA surface
+
+
+def fetch_rema_surface():
+    """Fetch + clip + resample the REMA surface to 200 m over the domain.
+
+    Reads the committed domain outline for the clip window (so this runs without
+    the source mosaics), windowed-reads the REMA v2.0 mosaic at 200 m with area
+    averaging, and writes a small compressed GeoTIFF. This is the elevation the
+    notebook routes meltwater over."""
+    import math
+    import rasterio
+    from rasterio.windows import from_bounds
+    from rasterio.enums import Resampling
+    from rasterio.transform import from_origin
+
+    # Anonymous, public S3; only fetch the window we ask for.
+    os.environ.setdefault("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+    os.environ.setdefault("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".vrt,.tif")
+    os.environ.setdefault("AWS_NO_SIGN_REQUEST", "YES")
+    os.environ.setdefault("AWS_DEFAULT_REGION", "us-west-2")
+    os.environ.setdefault("VSI_CACHE", "TRUE")
+
+    dom_fn = os.path.join(HERE, "nivlisen_domain.gpkg")
+    gdf = gpd.read_file(dom_fn)
+    domain = gdf[gdf["name"] == "domain"].geometry.values[0]
+    minx, miny, maxx, maxy = domain.bounds
+    # Pad and snap to the 200 m grid (a superset of the model mesh).
+    x0 = math.floor((minx - PAD_M) / RES_REMA) * RES_REMA
+    x1 = math.ceil((maxx + PAD_M) / RES_REMA) * RES_REMA
+    y0 = math.floor((miny - PAD_M) / RES_REMA) * RES_REMA
+    y1 = math.ceil((maxy + PAD_M) / RES_REMA) * RES_REMA
+    nx = int(round((x1 - x0) / RES_REMA))
+    ny = int(round((y1 - y0) / RES_REMA))
+    print(f"REMA target grid {ny}x{nx} @ {RES_REMA:.0f} m  "
+          f"x[{x0:.0f},{x1:.0f}] y[{y0:.0f},{y1:.0f}]")
+
+    with rasterio.open(REMA_VRT) as src:
+        win = from_bounds(x0, y0, x1, y1, src.transform)
+        dem = src.read(1, window=win, out_shape=(ny, nx),
+                       resampling=Resampling.average, boundless=True,
+                       fill_value=src.nodata).astype("float32")
+        nodata = float(src.nodata)
+    valid = (dem != nodata) & np.isfinite(dem)
+    print(f"REMA read: {valid.mean()*100:.1f}% valid, "
+          f"elev {dem[valid].min():.0f}-{dem[valid].max():.0f} m")
+
+    transform = from_origin(x0, y1, RES_REMA, RES_REMA)   # north-up
+    out_fn = os.path.join(HERE, "nivlisen_surface_rema_200m.tif")
+    with rasterio.open(
+        out_fn, "w", driver="GTiff", height=ny, width=nx, count=1,
+        dtype="float32", crs="EPSG:3031", transform=transform, nodata=nodata,
+        tiled=True, compress="deflate", predictor=2,
+    ) as dst:
+        dst.write(dem, 1)
+        dst.update_tags(
+            source="REMA Mosaic v2.0 (PGC, s3://pgc-opendata-dems), 32 m",
+            processing="clipped to Nivlisen domain, area-averaged to 200 m",
+            purpose="surface elevation for supraglacial meltwater routing",
+        )
+    print(f"wrote {out_fn}  ({os.path.getsize(out_fn)/1e6:.2f} MB, grid {dem.shape})")
 
 
 def _find(d, pattern):
@@ -112,4 +192,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # `rema` fetches just the REMA surface (needs only the committed domain
+    # outline + internet); the default clips BedMachine / velocity and needs the
+    # source mosaics in ~/projects/nivlisen.
+    if len(sys.argv) > 1 and sys.argv[1] == "rema":
+        fetch_rema_surface()
+    else:
+        main()

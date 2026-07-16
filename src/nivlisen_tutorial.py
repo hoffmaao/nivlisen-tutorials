@@ -371,6 +371,38 @@ def routing_grid(fe_coords, field, ice_polygon, res=2000.0):
     return np.where(inside, g, -9999.0), xs, ys, inside
 
 
+def routing_grid_rema(rema_path, fe_coords, ice_polygon):
+    r"""Rasterised routing grid taken straight from the committed REMA surface.
+
+    Where :func:`routing_grid` rasterises the smooth 2 km model surface, this
+    reads the observed **REMA 200 m** elevation (``data/nivlisen_surface_rema_
+    200m.tif``) — real supraglacial topography, fine enough that every mesh node
+    owns routing cells. We crop the raster to the mesh extent, flip it to
+    ascending-``y`` (the convention the rest of the routing code uses), and mark
+    everything off the ice — outside ``ice_polygon`` or a REMA void — as
+    **OCEAN** (-9999), so surface water leaving the ice drains at the true
+    margin. Returns ``(grid, xs, ys, inside)`` like :func:`routing_grid`."""
+    import rasterio
+    from rasterio.windows import from_bounds
+    from matplotlib.path import Path
+    x0, x1 = float(fe_coords[:, 0].min()), float(fe_coords[:, 0].max())
+    y0, y1 = float(fe_coords[:, 1].min()), float(fe_coords[:, 1].max())
+    with rasterio.open(rema_path) as src:
+        win = from_bounds(x0, y0, x1, y1, src.transform).round_lengths().round_offsets()
+        dem = src.read(1, window=win).astype("float64")
+        t = src.window_transform(win)
+        nodata = float(src.nodata)
+    ny, nx = dem.shape
+    dem = dem[::-1, :]                                    # north-up → ascending y
+    xs = t.c + t.a * (np.arange(nx) + 0.5)               # cell centres, ascending
+    ys = (t.f + t.e * (np.arange(ny) + 0.5))[::-1]       # t.e < 0, so reverse
+    gx, gy = np.meshgrid(xs, ys)
+    inside = Path(np.asarray(ice_polygon.exterior.coords)).contains_points(
+        np.column_stack([gx.ravel(), gy.ravel()])).reshape(gx.shape)
+    inside &= (dem != nodata) & np.isfinite(dem)
+    return np.where(inside, dem, -9999.0), xs, ys, inside
+
+
 def route_fsm(dem, water_in, fsm_bin="fsm_wrapper"):
     r"""Route ``water_in`` (m of water per cell) downslope over ``dem`` (m;
     NaN or < -9990 is an OCEAN drain) with the compiled Fill-Spill-Merge binary
@@ -389,6 +421,64 @@ def route_fsm(dem, water_in, fsm_bin="fsm_wrapper"):
         return np.fromfile(wo, dtype="<f8").reshape(ny, nx)
 
 
+class FSMRouter:
+    r"""Route many water fields over one fixed DEM with Fill-Spill-Merge.
+
+    Building the depression hierarchy is the expensive part of Fill-Spill-Merge
+    and depends only on the terrain, so the per-node melt routing — one route
+    per mesh node — should not rebuild it every time. The ``fsm_batch`` binary
+    builds it once and then routes each water field streamed to it. This class
+    holds that long-running process: ``route(water_in)`` sends one ``(ny, nx)``
+    field and returns the routed standing-water depth. Raw ``(ny, nx)`` C-order
+    float64 in and out, matching :func:`route_fsm`. Use as a context manager (or
+    call :meth:`close`) so the process and its DEM file are cleaned up::
+
+        with nt.FSMRouter(dem) as router:
+            for k in range(N):
+                wout = router.route(win_k)
+    """
+
+    def __init__(self, dem, fsm_bin="fsm_batch"):
+        import subprocess, tempfile, shutil
+        self.ny, self.nx = dem.shape
+        self._nbytes = self.ny * self.nx * 8
+        binpath = shutil.which(fsm_bin) or fsm_bin
+        self._td = tempfile.mkdtemp()
+        demf = f"{self._td}/dem.bin"
+        np.ascontiguousarray(dem, dtype="<f8").tofile(demf)
+        # The process reads the DEM and builds the hierarchy at startup, then
+        # blocks on stdin waiting for water frames. stderr is dropped: the FSM
+        # engine prints a progress bar per route, which would otherwise flood
+        # the notebook with thousands of lines.
+        self.proc = subprocess.Popen(
+            [binpath, str(self.ny), str(self.nx), demf],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    def route(self, water_in):
+        self.proc.stdin.write(np.ascontiguousarray(water_in, dtype="<f8").tobytes())
+        self.proc.stdin.flush()
+        chunks, got = [], 0
+        while got < self._nbytes:                 # pipes may return short reads
+            c = self.proc.stdout.read(self._nbytes - got)
+            if not c:
+                raise RuntimeError("fsm_batch exited before returning a frame")
+            chunks.append(c); got += len(c)
+        return np.frombuffer(b"".join(chunks), dtype="<f8").reshape(self.ny, self.nx)
+
+    def close(self):
+        import shutil
+        if self.proc.poll() is None:
+            self.proc.stdin.close()                # EOF ends the process loop
+            self.proc.wait(timeout=30)
+        shutil.rmtree(self._td, ignore_errors=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
 def grid_node_map(xs, ys, fe_coords):
     r"""Nearest mesh node for each grid cell (a Voronoi assignment). Compute
     once and reuse across many routings. Returns an ``(ny, nx)`` int array."""
@@ -398,7 +488,7 @@ def grid_node_map(xs, ys, fe_coords):
         np.column_stack([gx.ravel(), gy.ravel()]))[1].reshape(gx.shape)
 
 
-def grid_to_nodes(grid_field, nn, inside, n_nodes, res):
+def grid_to_nodes(grid_field, nn, inside, n_nodes):
     r"""Mass-conservingly average a per-cell grid field (m ice-equivalent) onto
     the mesh nodes: each ice cell is credited to its nearest node (``nn`` from
     :func:`grid_node_map`), and the node value is the area-weighted mean over

@@ -35,19 +35,26 @@ RUN sudo apt-get update \
 # The melt-sensitivity notebook routes surface meltwater downslope with
 # Fill-Spill-Merge. The upstream RichDEM / dephier / FSM libraries are
 # header-only (MIT); we clone them at a pinned commit and compile our small
-# raw-binary CLI wrapper (fsm/fsm_wrapper.cpp) against them, leaving the
-# `fsm_wrapper` binary on PATH. I/O is raw float64, so there is nothing to link.
+# raw-binary CLIs against them, leaving the binaries on PATH. I/O is raw
+# float64, so there is nothing to link. Two CLIs:
+#   fsm_wrapper  - route one water field over one DEM (single-shot demo).
+#   fsm_batch    - build the depression hierarchy once, then route many water
+#                  fields streamed on stdin (the per-node melt routing, which is
+#                  otherwise dominated by rebuilding the hierarchy every call).
 COPY fsm/fsm_wrapper.cpp /tmp/fsm/fsm_wrapper.cpp
+COPY fsm/fsm_batch.cpp /tmp/fsm/fsm_batch.cpp
 ARG FSM_COMMIT=1c499ea475c09b9f4c5da74ee5cc995de169db63
 RUN git clone https://github.com/r-barnes/Barnes2020-FillSpillMerge.git /tmp/fsm-src \
  && git -C /tmp/fsm-src checkout ${FSM_COMMIT} \
  && git -C /tmp/fsm-src submodule update --init --recursive \
- && g++ -O2 -std=c++17 \
-        -I/tmp/fsm-src/include \
-        -I/tmp/fsm-src/submodules/dephier/include \
-        -I/tmp/fsm-src/submodules/dephier/submodules/richdem/include \
-        -o /tmp/fsm_wrapper /tmp/fsm/fsm_wrapper.cpp \
- && sudo mv /tmp/fsm_wrapper /usr/local/bin/fsm_wrapper \
+ && for tool in fsm_wrapper fsm_batch; do \
+        g++ -O2 -std=c++17 \
+            -I/tmp/fsm-src/include \
+            -I/tmp/fsm-src/submodules/dephier/include \
+            -I/tmp/fsm-src/submodules/dephier/submodules/richdem/include \
+            -o /tmp/$tool /tmp/fsm/$tool.cpp \
+     && sudo mv /tmp/$tool /usr/local/bin/$tool; \
+    done \
  && sudo rm -rf /tmp/fsm-src /tmp/fsm
 
 # --- Ice-flow / adjoint stack -------------------------------------------------
