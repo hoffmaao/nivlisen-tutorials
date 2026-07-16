@@ -389,9 +389,9 @@ def routing_grid_rema(rema_path, fe_coords, ice_polygon):
     y0, y1 = float(fe_coords[:, 1].min()), float(fe_coords[:, 1].max())
     with rasterio.open(rema_path) as src:
         win = from_bounds(x0, y0, x1, y1, src.transform).round_lengths().round_offsets()
-        dem = src.read(1, window=win).astype("float64")
-        t = src.window_transform(win)
         nodata = float(src.nodata)
+        dem = src.read(1, window=win, boundless=True, fill_value=nodata).astype("float64")
+        t = src.window_transform(win)
     ny, nx = dem.shape
     dem = dem[::-1, :]                                    # north-up → ascending y
     xs = t.c + t.a * (np.arange(nx) + 0.5)               # cell centres, ascending
@@ -466,11 +466,17 @@ class FSMRouter:
         return np.frombuffer(b"".join(chunks), dtype="<f8").reshape(self.ny, self.nx)
 
     def close(self):
-        import shutil
-        if self.proc.poll() is None:
-            self.proc.stdin.close()                # EOF ends the process loop
-            self.proc.wait(timeout=30)
-        shutil.rmtree(self._td, ignore_errors=True)
+        import shutil, subprocess
+        try:
+            if self.proc.poll() is None:
+                self.proc.stdin.close()            # EOF ends the process loop
+                try:
+                    self.proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()               # unblock a wedged child
+                    self.proc.wait()
+        finally:
+            shutil.rmtree(self._td, ignore_errors=True)
 
     def __enter__(self):
         return self
