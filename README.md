@@ -32,17 +32,16 @@ nivlisen-tutorials/
 │   ├── nivlisen_data.nc     small clipped low-res grid (bed/thickness/vel/…)
 │   ├── nivlisen_domain.gpkg buffered domain & basin outlines
 │   ├── nivlisen_ice_domain.gpkg  pre-carved ice-only domain (calving front)
-│   ├── nivlisen_surface_rema_200m.tif  REMA 200 m surface (meltwater routing)
 │   └── prepare_data.py      (author-side) how the small data were made
 ├── src/nivlisen_tutorial.py shared helpers (data, mesh, prior, model, plots)
-├── fsm/                     Fill-Spill-Merge routing CLIs (fsm_wrapper, fsm_batch; compiled into the image)
+├── fsm/fsm_wrapper.cpp      Fill-Spill-Merge meltwater routing (compiled into the image)
 ├── mesh/                    meshes written by notebook 00
 └── notebooks/               00-domain, 01-inversion, 02-uncertainty, 03-melt-flux, 04-figures
 ```
 
-The committed dataset (~4.7 MB, mostly the REMA routing surface) is already
-clipped and subsampled, so you do **not** need the multi-gigabyte source mosaics
-or NASA Earthdata credentials to run the tutorials.
+The committed dataset (~0.35 MB) is already clipped and subsampled, so you do
+**not** need the multi-gigabyte source mosaics or NASA Earthdata credentials to
+run the tutorials.
 
 ---
 
@@ -162,6 +161,4 @@ for you) and run the notebooks in order, starting with
 
 `data/nivlisen_data.nc` is committed, so this is rarely needed. To rebuild it
 from the full mosaics you need the production `~/projects/nivlisen` tree
-populated; then `python data/prepare_data.py`. The REMA routing surface is
-fetched separately from public PGC open data (no source tree needed) with
-`python data/prepare_data.py rema` (see `data/prepare_data.py` for details).
+populated; then `python data/prepare_data.py`.
