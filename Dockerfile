@@ -52,8 +52,8 @@ RUN git clone https://github.com/r-barnes/Barnes2020-FillSpillMerge.git /tmp/fsm
             -I/tmp/fsm-src/include \
             -I/tmp/fsm-src/submodules/dephier/include \
             -I/tmp/fsm-src/submodules/dephier/submodules/richdem/include \
-            -o /tmp/$tool /tmp/fsm/$tool.cpp \
-     && sudo mv /tmp/$tool /usr/local/bin/$tool; \
+            -o /tmp/$tool /tmp/fsm/$tool.cpp || exit 1; \
+        sudo mv /tmp/$tool /usr/local/bin/$tool || exit 1; \
     done \
  && sudo rm -rf /tmp/fsm-src /tmp/fsm
 
