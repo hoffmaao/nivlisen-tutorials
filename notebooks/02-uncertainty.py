@@ -4,8 +4,10 @@
 #     text_representation:
 #       extension: .py
 #       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.19.4
 #   kernelspec:
-#     display_name: Python 3
+#     display_name: Python 3 (ipykernel)
 #     language: python
 #     name: python3
 # ---
@@ -13,27 +15,15 @@
 # %% [markdown]
 # # 3. How certain is the inversion?
 #
-# Notebook 2 gave us *a* friction and fluidity field that fits the data — but the
-# data do not pin down every detail. Where the ice flows fast and is
-# well-observed, the velocity strongly constrains the controls; in the slow
-# interior the velocity barely depends on them, so we are mostly believing the
-# **prior**. This notebook quantifies that.
+# From the previous notebook we calculated the friction and fluidity fields that best fit the data. Where the ice flows fast and is well-observed, the velocity strongly constrains the controls; however, in the slow interior, the noise affects our velocity solution.
 #
-# We use the Bayesian / **fenics_ice–Recinos** framework. Near the optimum the
-# posterior is approximately Gaussian (a *Laplace approximation*) with covariance
+# For problems where we want to propagte uncertainty assocaited with observations on the fit to data, we can take a Bayesian approach. Near the optimum the posterior is approximately Gaussian (a *Laplace approximation*) with covariance
 #
 # $$ \Gamma_\text{post} = \big(H_\text{mis} + A\big)^{-1}, $$
 #
-# where $H_\text{mis}$ is the Hessian of the data-misfit (how sharply the misfit
-# curves — i.e. how much the data constrain each direction) and $A=\delta M+\gamma K$
-# is the **prior precision** (the Hessian of the regulariser). The key object is
-# the **prior-preconditioned misfit Hessian** $A^{-1}H_\text{mis}$: its
-# eigenvalues say, direction by direction, whether the data ($\lambda\gg1$) or the
-# prior ($\lambda\ll1$) wins.
+# where $H_\text{mis}$ is the Hessian of the data-misfit (how sharply the misfit curves — i.e. how much the data constrain each direction) and $A=\delta M+\gamma K$ is the **prior precision** (the Hessian of the regulariser). The key object is the **prior-preconditioned misfit Hessian** $A^{-1}H_\text{mis}$: its eigenvalues say, direction by direction, whether the data ($\lambda\gg1$) or the prior ($\lambda\ll1$) wins.
 #
-# We never form $H_\text{mis}$ as a matrix. We only need its *action* on a vector
-# (a Hessian–vector product, by the adjoint method) and feed that to an iterative
-# eigensolver — exactly what a production study does, where the controls have
+# We never form $H_\text{mis}$ as a matrix. We only need its *action* on a vector (a Hessian–vector product, by the adjoint method) and feed that to an iterative eigensolver — exactly what a production study does, where the controls have
 # millions of DOFs.
 
 # %% [markdown]
@@ -197,9 +187,7 @@ plt.show()
 # %% [markdown]
 # ### The best-constrained patterns
 #
-# The leading eigenvectors are the friction/fluidity patterns the data constrain
-# most — unsurprisingly they light up the fast-flowing ice. Here are the θ
-# (friction) components of the first few.
+# The leading eigenvectors are the friction/fluidity patterns that the data constrain the most — unsurprisingly they are strongest in the fastest-flowing regions near the grounding zone.
 
 # %%
 fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -209,7 +197,6 @@ for k, ax in enumerate(axes):
     m = float(np.abs(mode.dat.data_ro).max()) or 1.0
     c = nt.plot_field(mode, ax, cmap="RdBu_r", vmin=-m, vmax=m)
     ax.set_title(f"mode {k+1}  (λ = {evals[k]:.1f})")
-fig.suptitle("Leading constrained patterns of log-friction θ", y=1.02)
 fig.tight_layout(); plt.show()
 
 # %% [markdown]
@@ -220,17 +207,13 @@ fig.tight_layout(); plt.show()
 # $$ \Gamma_\text{post} = A^{-1} - \sum_{k} \frac{\lambda_k}{1+\lambda_k}\,
 #    v_k v_k^\top, $$
 #
-# i.e. the prior covariance $A^{-1}$, minus a correction along each
-# data-constrained direction (modes with $\lambda_k\gg1$ contribute a full
-# $v_kv_k^\top$; modes with $\lambda_k\ll1$ contribute almost nothing). The
-# **uncertainty reduction** is the relative drop in pointwise variance,
+# i.e. the prior covariance $A^{-1}$, minus a correction along each data-constrained direction (modes with $\lambda_k\gg1$ contribute a full $v_kv_k^\top$; modes with $\lambda_k\ll1$ contribute almost nothing). The **uncertainty reduction** is the relative drop in pointwise variance,
 #
 # $$ 1-\frac{\operatorname{diag}\Gamma_\text{post}}{\operatorname{diag}A^{-1}}
 #    = \frac{\sum_k \frac{\lambda_k}{1+\lambda_k}\,(v_k)_i^2}
 #           {\operatorname{diag}(A^{-1})_i}, $$
 #
-# near 1 where the data taught us a lot, near 0 where we still rely on the prior.
-# (We form $\operatorname{diag}A^{-1}$ once from the factorised prior.)
+# Near 1 the spatial variations in friction are constrained the most by the data. Near 0 where we must rely on the prior. (We form $\operatorname{diag}A^{-1}$ once from the factorised prior.)
 
 # %%
 # pointwise prior variance = diag(A^{-1}); θ and φ share the prior, so we only
@@ -252,15 +235,10 @@ for ax, blk, name in zip(axes, [slice(0, ndof), slice(ndof, None)],
     c = nt.plot_field(to_Q(reduction[blk]), ax, vmin=0, vmax=1, cmap="viridis")
     fig.colorbar(c, ax=ax, shrink=0.6)
     ax.set_title(f"uncertainty reduction — {name}")
-fig.suptitle("Where the velocity data constrain the controls (1 = fully)", y=0.98)
 fig.tight_layout(); plt.show()
 
 # %% [markdown]
-# The bright regions — the fast outlet glaciers and shear margins — are where the
-# surface velocity actually informs the friction and fluidity; the dark interior
-# is essentially unconstrained by the data, so its inferred values are really just
-# the prior. This map is the honest companion to the inversion: it tells you which
-# parts of the friction/fluidity estimate to trust.
+# The regions close to one are constrained by the data while the regions closer to zero are areas where the parameters are essentially unconstrained by the data, so its inferred values are really just the prior. The map essentially tells us which parts of the friction/fluidity estimate to trust.
 
 # %%
 # Save the uncertainty-reduction fields alongside the inversion for reuse.
@@ -276,10 +254,7 @@ print("saved ../output/uncertainty.h5")
 # %% [markdown]
 # ## Recap
 #
-# Across the three notebooks we introduced the Nivlisen domain and data, carved
-# the ice-only mesh with a delineated calving front, inferred the basal friction
-# and ice fluidity with a σ-weighted misfit and a Whittle–Matérn prior (Recinos
-# et al., 2023), and quantified the posterior uncertainty by an eigenanalysis of
-# the prior-preconditioned Gauss–Newton Hessian (the fenics_ice framework). The
-# same workflow — on an adaptive high-resolution mesh, with thousands of Hessian
-# modes — is what the production study runs.
+# Across the first three notebooks we've introduced the Nivlisen domain and data, inferred the basal friction and ice fluidity with a σ-weighted misfit and a Whittle–Matérn prior, and quantified the posterior uncertainty by an eigenanalysis of the prior-preconditioned Gauss–Newton Hessian (the fenics_ice framework).
+
+# %% [markdown]
+#

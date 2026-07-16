@@ -4,6 +4,8 @@
 #     text_representation:
 #       extension: .py
 #       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.19.4
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -13,37 +15,23 @@
 # %% [markdown]
 # # 1. The Nivlisen ice shelf: domain, data, and mesh
 #
-# This is the first of three notebooks that infer the basal **friction** and ice
-# **fluidity** of the Nivlisen ice shelf and its grounded catchment, and then
-# estimate the **uncertainty** of that inference. They are a teaching version of
-# a production study, written in the style of the
-# [icepack tutorials](https://icepack.github.io/notebooks/tutorials/).
+# This is the first of a series of notebooks that infer the basal **friction** and ice **fluidity** of the Nivlisen ice shelf and its grounded catchment, then estimate the **uncertainty** of that inference, and finally use the surface elevation of the catchment and the model adjoint to understand how water routed over the ice sheet surface affects grounded ice discharge.
 #
-# **Nivlisen** is an ice shelf in Dronning Maud Land, East Antarctica
-# (≈ 70°S, 11°E). Ice from the grounded *Nivl* drainage basin flows north,
-# crosses the grounding line, and spreads out as the floating Nivlisen shelf
-# before calving into the ocean. We model the whole system — grounded ice *and*
-# shelf — with a single shallow-stream (SSA) model from
-# [icepack](https://icepack.github.io/).
+# **Nivlisen** is an ice shelf in Dronning Maud Land, East Antarctica (70°S, 11°E). Ice from the grounded *Nivlisen* catchment flows north, crosses the grounding line, and spreads out over the floating Nivlisen shelf before calving into the ocean. We model the system using the shallow-stream (SSA) model implemented in [icepack](https://icepack.github.io/).
 #
 # In this notebook we:
 #
 # 1. load the gridded observations (bed, thickness, surface, velocity),
-# 2. look at the region and the pre-carved **ice-only domain**, and
-# 3. build an **adaptive mesh**, refined where the ice deforms hardest, with its
-#    boundary split into the parts where ice flows *in* and the part that faces
-#    the *ocean* (the **calving front**).
+# 2. visualize the **domain**, and
+# 3. build an **adaptive mesh**, refined where the effective strain rates are highest.
 #
-# Everything runs at low resolution so it finishes in a minute or two.
+# Everything runs at modest resolution so it should finish in a couple hours.
 
 # %% [markdown]
 # ## Setup
 #
-# We add the repository's `src/` folder to the path (it holds small helper
-# functions, kept out of the notebooks so the science stays front and centre)
-# and use paths *relative to this notebook*. Because the repository is mounted
-# into the container, anything we write under `../mesh` or `../output` persists
-# on the host and is picked up by the later notebooks.
+# We add the repository's `src/` folder to the path (it holds small helper functions). Because the repository is mounted
+# into the container, anything we write under `../mesh` or `../output` will stay in the container and can be picked up by the later notebooks. We save output to interpret out side of the container in the output folder.
 
 # %%
 import sys, os
@@ -64,8 +52,7 @@ os.makedirs("../mesh", exist_ok=True)
 # %% [markdown]
 # ## The data
 #
-# A single small NetCDF holds everything we need on a coarse (2 km) grid in the
-# Antarctic Polar Stereographic projection (EPSG:3031):
+# We start by loading in our data. These include include:
 #
 # - **bed**, **thickness**, **surface** — from
 #   [BedMachine Antarctica v3](https://nsidc.org/data/nsidc-0756),
@@ -73,16 +60,10 @@ os.makedirs("../mesh", exist_ok=True)
 #   [MEaSUREs 450 m velocity mosaic](https://nsidc.org/data/nsidc-0484),
 # - **mask** — BedMachine's ice/ocean/grounded classification.
 #
-# The full mosaics are many gigabytes; the committed file is the small piece
-# clipped to Nivlisen (see `data/prepare_data.py` for exactly how it was made),
-# so you never need the originals or any data credentials.
+# The full continent wide products are many gigabytes; the committed file is the small piece clipped to Nivlisen (see `data/prepare_data.py` for exactly how it was made).
 #
-# We also load the **ice-only domain** — the outline of where there actually
-# *is* ice, with a clean calving front — pre-carved and saved to
-# `nivlisen_ice_domain.gpkg` (made once by subtracting the open ocean from the
-# buffered production outline; we load the finished boundary rather than
-# re-derive it here). The buffered `domain` is still loaded because the mesher
-# uses it to tell the **inflow** boundary from the **calving front**.
+# We also load the **model domain** — the outline of where there there is ice,
+# `nivlisen_ice_domain.gpkg`.
 
 # %%
 ds = nt.load_data(DATA)
@@ -97,8 +78,7 @@ print(f"ice domain area: {ice.area/1e6:,.0f} km²")
 # %% [markdown]
 # ## A look at the region
 #
-# The catchment is a long, narrow grounded basin (south) that widens into the
-# floating shelf (north). The black outline is the **ice domain** we model — its
+# The catchment is a long, narrow grounded basin (south) that widens into the floating shelf (north). The black outline is the **ice domain** we model. Its
 # northern edge is the calving front.
 
 # %%
@@ -121,40 +101,29 @@ for ax in axes:
     ax.set_aspect("equal")
     ax.set_xlabel("x (km)")
 axes[0].set_ylabel("y (km)")
-fig.suptitle("Nivlisen ice shelf and the Nivl catchment", y=0.93)
 fig.tight_layout()
 plt.show()
 
 # %% [markdown]
-# The shelf and the fast outlet glaciers feeding it show up clearly in the speed
-# map (right); the slow interior of the catchment is nearly stagnant. This is the
-# velocity field we will try to reproduce by inverting for the friction and
-# fluidity.
+# The shelf and the fast outlet glaciers feeding it show up clearly in the speed map (right); the slow interior of the catchment moves comparitvely slowly. This is the
+# velocity field we will try to reproduce by inverting for the friction and the prefactor in the glen flow law.
 
 # %% [markdown]
 # ## Building an adaptive mesh
 #
-# `nt.build_mesh` triangulates the ice domain and — importantly — splits its
-# boundary into two physical groups, returning their tags:
+# `nt.build_mesh` triangulates the ice domain and — importantly — splits its boundary into two "physical groups", returning their tags:
 #
-# - **inflow** (tag 1): the inland boundary, where ice flows in from the
-#   neighbouring catchments. The inverse model will *clamp* the velocity here to
-#   the observations (a Dirichlet condition).
-# - **calving front** (tag 2): the seaward arc, where the model applies the
-#   ice/ocean back-pressure (the *terminus* condition).
+# - **inflow** (tag 1): the inland boundary, where ice flows in from the  neighbouring catchments. The inverse model will *clamp* the velocity here to the observations (a Dirichlet condition).
+# - **calving front** (tag 2): the seaward arc, where the model applies the ice/ocean back-pressure (the *terminus* condition).
 #
-# A boundary segment is "inflow" if it lies on the buffered outline and
-# "calving" otherwise.
+# A boundary segment is "inflow" if it lies on the buffered outline and "calving" otherwise.
 #
-# Rather than a uniform mesh, we **spend resolution where the ice is working
-# hardest**. From the observed velocity we form the effective strain rate
+# Rather than a uniform mesh, we **spend resolution where the ice is working hardest**. From the observed velocity we form the effective strain rate 
 # $\dot\varepsilon_e=\sqrt{\dot\varepsilon_{xx}^2+\dot\varepsilon_{yy}^2+
 # \dot\varepsilon_{xx}\dot\varepsilon_{yy}+\dot\varepsilon_{xy}^2}$ and, through
 # Glen's flow law, the effective stress $\tau_e=(\dot\varepsilon_e/A)^{1/n}$.
-# Where either is large — the shear margins, the grounding line, the fast trunk
-# — we shrink the target element size toward `FINE`, coarsening to `COARSE` in
-# the near-stagnant interior. This follows the production study's
-# strain-rate-driven refinement.
+# Where the effective stress is large (e.g. the shear margins, the grounding line, the fast trunk), we shrink the target element size toward `FINE`, coarsening to `COARSE` in
+# the near-stagnant interior.
 
 # %%
 from scipy.interpolate import RegularGridInterpolator
@@ -259,13 +228,8 @@ ax.set_title("Grounded (1) vs floating (0)")
 plt.show()
 
 # %% [markdown]
-# The grounded basin (south, $\phi\approx1$) and the floating Nivlisen shelf
-# (north, $\phi\approx0$) are clearly separated, with the **grounding line**
-# running across the middle — exactly where we would expect it.
+# The grounded basin (south, $\phi\approx1$) and the floating Nivlisen shelf (north, $\phi\approx0$) are clearly separated, with the **grounding line** running across the middle — exactly where we would expect it.
 #
-# The mesh and the boundary tags are all the next notebook needs. We saved the
-# mesh to `../mesh/nivlisen_tutorial.msh`; because that path lives in the mounted
-# repository, **notebook 2 (the inversion)** loads exactly this mesh, with the
-# convention **tag 1 = inflow, tag 2 = calving front**.
+# The mesh and the boundary tags are all the next notebook needs. We saved the mesh to `../mesh/nivlisen_tutorial.msh`; because that path lives in the mounted repository, **notebook 2 (the inversion)** loads exactly this mesh, with the convention **tag 1 = inflow, tag 2 = calving front**.
 #
 # ➡️ Continue with [`01-inversion.ipynb`](01-inversion.ipynb).

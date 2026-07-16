@@ -4,6 +4,8 @@
 #     text_representation:
 #       extension: .py
 #       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.19.4
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -13,9 +15,7 @@
 # %% [markdown]
 # # 4. How surface melt changes the grounding-zone flux
 #
-# The first three notebooks built a model of Nivlisen that reproduces the
-# observed flow (inverting for friction and fluidity) and said how well the data
-# constrain it. Here we use that calibrated model to ask a **forward** question:
+# The first three notebooks built a model of Nivlisen that reproduces the observed flow (inverting for friction and fluidity). Here we use that calibrated model to ask a new question connected to grounding zone flux sensitivity:
 #
 # > if surface meltwater is produced somewhere on the ice, how much does the
 # > **grounding-zone flux** — the ice discharge across the grounding line —
@@ -23,18 +23,11 @@
 #
 # Two ingredients combine into one map:
 #
-# 1. **Sensitivity to thinning.** Using the *adjoint* of the flow model we get,
-#    in a single solve, how the grounding-zone flux responds to thinning the ice
-#    by 1 m at *every* point at once — $\partial Q_{GL}/\partial h$.
-# 2. **Where the meltwater goes.** Surface water does not thin the ice where it
-#    is produced; it runs downhill along the surface and pools or drains. We
-#    route it with **Fill-Spill-Merge** (Barnes et al., 2020) down the ice
-#    *surface* — which, for supraglacial water, *is* the hydraulic potential.
+# 1. **Sensitivity to thinning.** Using the *adjoint* of the flow model we get, in a single solve, how the grounding-zone flux responds to thinning the ice by 1 m at *every* point at once — $\partial Q_{GL}/\partial h$.
+# 2. **meltwater routing.** Surface water does not thin the ice where it is produced; it runs downhill along the surface and pools in hydropotential lows. We route it with **Fill-Spill-Merge** (Barnes et al., 2020) down the ice *surface* — which, for supraglacial water, *is* the hydraulic potential.
 #
-# Composing them gives the **grounding-zone-flux sensitivity to surface melt**:
-# melt of 1 m anywhere in the domain → its effect on the discharge, *after* the
-# water has been routed. Comparing the routed answer with the naive
-# "melt-thins-in-place" answer shows what the rerouting does.
+# Combining these methods gives the **grounding-zone-flux sensitivity to surface melt**: melt of 1 m anywhere in the domain, and its effect on the discharge, *after* the
+# water has been routed. Comparing the routed answer with the naive "melt-thins-in-place" answer shows how surface meltwater rerouting affects the glacier's response to ocean forcing.
 
 # %% [markdown]
 # ## Setup: load the calibrated model
@@ -85,16 +78,12 @@ def simulation(thickness):
 # %% [markdown]
 # ## The grounding-zone flux
 #
-# We measure the flux across the grounding line without ever tracing the line
-# itself, using a divergence trick. For a grounded indicator $\chi$ (1 on
-# grounded ice, 0 on the shelf), $\nabla\chi$ is a narrow ridge sitting exactly
+# We measure the flux across the grounding line without ever tracing the line itself, using a divergence trick. For a grounded indicator $\chi$ (1 on grounded ice, 0 on the shelf), $\nabla\chi$ is a narrow ridge sitting exactly
 # on the flotation contour, so
 #
 # $$ Q_{GL} = \int h\,\mathbf u\cdot\nabla\chi \; dx $$
 #
-# collects $h\,\mathbf u\cdot\hat n$ across the grounding line. `nt.grounding_line_gate`
-# builds a smooth $\chi$ from the flotation criterion; the flux is signed
-# (negative = outflow), and $\times$ `nt.ICE_TO_GT` converts m³/yr to Gt/yr.
+# collects $h\,\mathbf u\cdot\hat n$ across the grounding line. `nt.grounding_line_gate` builds a smooth $\chi$ from the flotation criterion; the flux is signed (negative = outflow), and $\times$ `nt.ICE_TO_GT` converts m³/yr to Gt/yr.
 
 # %%
 gate = nt.grounding_line_gate(h, s, Q, length=4000.0)
@@ -106,15 +95,7 @@ print(f"grounding-zone flux Q_GL = {Q_GL:.3e} m³/yr  →  discharge {discharge:
 # %% [markdown]
 # ## Sensitivity to thinning, by the adjoint
 #
-# We want $\partial Q_{GL}/\partial h$: how the flux changes when the ice thins.
-# The adjoint method gives the whole field — the response to a 1 m perturbation
-# at *every* node — from a single linearised solve, exactly the machinery
-# notebook 3 used for the Hessian. We tape one forward solve with `firedrake.adjoint`,
-# treating the **thickness** as the control (the grounded mask is frozen at its
-# reference value, so we measure the flux through the fixed reference grounding
-# line, not its migration), then ask for the gradient of the flux in the
-# cotangent space (`riesz_representation=None`) so it is the raw
-# $\partial Q_{GL}/\partial h_i$ per node.
+# We want $\partial Q_{GL}/\partial h$: how the flux changes when the ice thins. The adjoint method gives the whole field — the response to a 1 m perturbation at *every* node — from a single linearised solve. We tape one forward solve with `firedrake.adjoint`, treating the **thickness** as the control (the grounded mask is frozen at its reference value, so we measure the flux through the fixed reference grounding line, not its migration), then ask for the gradient of the flux in the cotangent space (`riesz_representation=None`) so it is the raw $\partial Q_{GL}/\partial h_i$ per node.
 
 # %%
 fda.continue_annotation()
@@ -134,12 +115,7 @@ print(f"discharge response to 1 m thinning (Gt/yr): "
       f"min={dD_thinning.min():.2e}  max={dD_thinning.max():.2e}")
 
 # %% [markdown]
-# A finite-difference check in a smooth direction (uniform thinning) confirms the
-# adjoint: its directional derivative matches a *converged* finite difference to
-# about 2%. The small residual is honest — it comes from the **non-smooth**
-# flotation term in the friction law right at the grounding line, exactly where
-# the flux gate concentrates (so a formal Taylor test converges at first order,
-# not second). A couple of percent is immaterial for the sensitivity map.
+# A finite-difference check in a smooth direction (uniform thinning) confirms the adjoint: its directional derivative matches a *converged* finite difference to about 2%. The small residual comes from the **non-smooth** flotation term in the friction law right at the grounding line (a formal Taylor test converges at first order, not second). A couple of percent is immaterial for the sensitivity map.
 
 # %%
 v = Function(Q).interpolate(Constant(1.0))           # uniform-thinning direction
@@ -152,10 +128,7 @@ print(f"directional derivative — adjoint {adj_dd:.3e}  vs finite-diff {fd_dd:.
       f"(agree to {abs(adj_dd - fd_dd)/abs(fd_dd):.1%})")
 
 # %% [markdown]
-# The thinning sensitivity, mapped. To leading order it is set by the thickness
-# actually fluxed across the gate: thinning ice on the grounding line lowers the
-# discharge (blue), while the weaker dynamic response — thinning speeds the flow
-# — pushes the other way in places. It is near zero in the slow interior, where
+# The grounding zone flux sensitivity, to leading order, is set by thinning at the grounding zone which lowers the discharge (blue). It is near zero in the slow interior, where
 # the velocity barely depends on thickness.
 
 # %%
@@ -200,7 +173,7 @@ axes[0].pcolormesh(xs/1e3, ys/1e3, np.where(dem > -9990, dem, np.nan), cmap="ter
 axes[0].set_title("surface elevation (routes the water)")
 vmax = float(np.nanpercentile(pooled, 98)) if np.isfinite(pooled).any() else 1.0
 p = axes[1].pcolormesh(xs/1e3, ys/1e3, pooled, cmap="Blues", vmin=0, vmax=vmax)
-axes[1].set_title("where a uniform 1 m melt collects\n(pooled water depth, m)")
+axes[1].set_title("pooled water depth, m")
 fig.colorbar(p, ax=axes[1], shrink=0.7, label="pooled water (m)")
 for ax in axes:
     ax.set_aspect("equal"); ax.set_xlabel("x (km)")
@@ -210,16 +183,11 @@ fig.tight_layout(); plt.show()
 # %% [markdown]
 # ## The melt-sensitivity map
 #
-# Now the payoff. For melt produced at each node we route the water, express the
-# result as a thickness change $\delta h$ on the mesh (−1 m where the ice melts,
-# $+$ where water pools downstream), and dot it with the adjoint sensitivity:
+# For melt produced at each node we route the water, express the result as a thickness change $\delta h$ on the mesh, and dot it with the adjoint sensitivity:
 #
 # $$ S(\mathbf x)=-\,\texttt{ICE\_TO\_GT}\;\sum_i \frac{\partial Q_{GL}}{\partial h_i}\,\delta h_i(\mathbf x), $$
 #
-# the change in grounding-zone discharge per 1 m of melt at $\mathbf x$ (a plain
-# dual pairing — the raw adjoint gradient dotted with the routed thickness
-# change). The **routed** map uses $\delta h$ from Fill-Spill-Merge; the
-# **unrouted** map is the naive assumption that melt just thins the ice where it
+# the change in grounding-zone discharge per 1 m of melt at $\mathbf x$ (a plain dual pairing — the raw adjoint gradient dotted with the routed thickness change). The **routed** map uses $\delta h$ from Fill-Spill-Merge; the **unrouted** map is the naive assumption that melt just thins the ice where it
 # falls ($\delta h=-1$ locally), which is exactly the thinning sensitivity above.
 
 # %%
@@ -239,9 +207,7 @@ sens_unrouted = g_raw * nt.ICE_TO_GT                  # melt thins in place
 print(f"routed map done in {time.time()-t0:.0f}s")
 
 # %% [markdown]
-# Routed versus unrouted, side by side. The difference is the fingerprint of
-# surface hydrology: melt produced up-glacier is delivered downslope before it
-# thins the ice, so the sensitivity shifts toward where the water actually ends
+# Routed versus unrouted, side by side. The difference is the fingerprint of surface hydrology: melt produced up-glacier is delivered downslope before it thins the ice, so the sensitivity shifts toward where the water actually ends
 # up rather than where it was generated.
 
 # %%
@@ -254,12 +220,9 @@ for ax, f, title in [(axes[0], f_u, "unrouted (melt thins in place)"),
     c = nt.plot_field(f, ax, cmap="RdBu_r", vmin=-m, vmax=m)
     ax.set_title(title)
 fig.colorbar(c, ax=axes, shrink=0.6, label="Δ discharge per 1 m melt (Gt/yr)")
-fig.suptitle("Grounding-zone flux sensitivity to surface melt", y=0.98)
 plt.show()
 
 # %% [markdown]
-# ## Save
-#
 # We store the sensitivity fields for reuse, alongside the inversion.
 
 # %%
@@ -274,9 +237,7 @@ print("saved ../output/melt_sensitivity.h5")
 # %% [markdown]
 # ## Recap
 #
-# We turned the calibrated Nivlisen model into a **melt-sensitivity map**: the
-# adjoint gave the grounding-zone flux's response to thinning everywhere at once,
-# Fill-Spill-Merge said where surface meltwater actually goes, and composing them
-# showed how much the discharge responds to melt produced at any point — and how
-# surface routing moves that sensitivity around. The same construction, on a fine
-# adaptive mesh with a converged inversion, is what a production study runs.
+# Using the calibrated Nivlisen model, we've built a **melt-sensitivity map**. The adjoint gave the grounding-zone flux's response to thinning across the domain. The water routing algorthim reveals where surface meltwater is transported. Combining them shows how much the discharge changes due to melt across the domain.
+
+# %% [markdown]
+#

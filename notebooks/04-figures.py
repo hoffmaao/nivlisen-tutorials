@@ -4,6 +4,8 @@
 #     text_representation:
 #       extension: .py
 #       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.19.4
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -13,12 +15,8 @@
 # %% [markdown]
 # # 5. Figures for the poster
 #
-# The previous notebooks wrote their results to `../output/*.h5`. This notebook
-# is a pure **visualisation** layer: it reloads those results and renders a set
-# of poster-ready figures, saving each to `../output/figures/` as a
-# high-resolution **PNG** (300 dpi) *and* a vector **PDF**. Because `../output`
-# is the mounted repository, the files land on your host machine, ready to drop
-# into a poster.
+# The previous notebooks wrote their results to `../output/*.h5`. Here, we reload those results and render a set
+# of figures, saving each to `../output/figures/` as a high-resolution **PNG** (300 dpi) *and* a vector **PDF**. Because `../output` is the mounted repository, the files land on your host machine.
 #
 # Run it after notebooks 00–03. It recomputes nothing, so it finishes in seconds.
 
@@ -56,8 +54,7 @@ def field(f, ax, **kw):
 # %% [markdown]
 # ## The model domain and adaptive mesh
 #
-# The triangulation, refined toward the shear margins, grounding line and fast
-# trunk from the effective stress and strain rate (notebook 1).
+# The triangulation, refined toward the shear margins, grounding line and fast trunk from the effective stress and strain rate (notebook 1).
 
 # %%
 with fd.CheckpointFile("../output/inversion.h5", "r") as chk:
@@ -72,10 +69,9 @@ nt.plot_mesh(mesh, ax)
 save(fig, "00_model_domain"); plt.show()
 
 # %% [markdown]
-# ## Model skill: observed vs. modelled speed
+# ## Observed vs. modelled speed
 #
-# The inversion (notebook 2) makes the modelled velocity match the observations.
-# Side by side, on a shared colour scale.
+# The inversion (notebook 2) makes the modelled velocity match the observations. Side by side, on a shared colour scale.
 
 # %%
 Q = fd.FunctionSpace(mesh, "CG", 1)
@@ -93,9 +89,7 @@ save(fig, "01_speed_obs_vs_modelled"); plt.show()
 # %% [markdown]
 # ## Inferred bed friction and ice fluidity
 #
-# The two fields the inversion recovers: log-friction θ (stickier bed where
-# high) on the grounded catchment, and log-fluidity φ (softer ice where high)
-# across the whole domain.
+# The two inverted ffields: log-friction θ on the grounded catchment, and log-fluidity φ across the whole domain.
 
 # %%
 tm = float(np.percentile(np.abs(theta.dat.data_ro), 98)) or 1.0
@@ -111,8 +105,7 @@ save(fig, "02_inferred_friction_fluidity"); plt.show()
 # %% [markdown]
 # ## Where the data constrain the inversion
 #
-# The posterior uncertainty reduction (notebook 3): near 1 where the velocity
-# pins the controls down, near 0 where we lean on the prior.
+# The posterior uncertainty reduction (notebook 3). Uncertainty reductinon appraoches 1 where the velocity pins the controls down, near 0 where we lean on the prior.
 
 # %%
 with fd.CheckpointFile("../output/uncertainty.h5", "r") as chk:
@@ -130,9 +123,7 @@ save(fig, "03_uncertainty_reduction"); plt.show()
 # %% [markdown]
 # ## Grounding-zone flux sensitivity to melt (the headline)
 #
-# From notebook 4: first the adjoint sensitivity of the discharge to thinning,
-# then the melt-sensitivity map — routed (Fill–Spill–Merge) vs. thinning in
-# place — the figure the poster is built around.
+# From notebook 4: first the adjoint sensitivity of the discharge to thinning, then the melt-sensitivity map — routed (Fill–Spill–Merge) vs. thinning in place.
 
 # %%
 with fd.CheckpointFile("../output/melt_sensitivity.h5", "r") as chk:
