@@ -4,6 +4,8 @@
 #     text_representation:
 #       extension: .py
 #       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.19.4
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -13,32 +15,23 @@
 # %% [markdown]
 # # 2. Inverting for friction and fluidity
 #
-# We can measure how fast the ice flows (from satellites), but two of the things
-# that *control* that flow are hidden underneath it:
+# We can measure how fast the ice flows (from satellites), but the parameters that *control* that flow are not observable directly:
 #
 # - the **basal friction** — how strongly the bed resists sliding, and
-# - the ice **fluidity** — how easily the ice deforms (it depends on temperature,
-#   damage, fabric…).
+# - the ice **fluidity** — how easily the ice deforms (it depends on temperature, damage, fabric...).
 #
-# In this notebook we **invert** the observed surface velocity for both fields at
-# once. We treat them as spatially-varying log-adjustments to reference values,
+# In this notebook we use the observed surface velocities to infer both of these fields. We treat them as spatially-varying log-adjustments to reference values,
 #
 # $$ C = C_0\,e^{\theta}, \qquad A = A_0\,e^{\varphi}, $$
 #
-# (the exponential keeps them positive) and find the $\theta$ (log-friction) and
-# $\varphi$ (log-fluidity) that make the modelled velocity match the
-# observations, regularised so the answer stays smooth and physically
-# reasonable. We use icepack's
-# [`StatisticsProblem`](https://icepack.github.io/), which wraps the adjoint
-# gradient and the optimiser for us.
+# (the exponential form of the parameterization enforces positivity) and find the $\theta$ (log-friction) and
+# $\varphi$ (log-fluidity) that make the modelled velocity match the observations, regularised so the answer stays smooth and physically reasonable. We use icepack's
+# [`StatisticsProblem`](https://icepack.github.io/), which wraps the adjoint gradient and the optimiser for us.
 
 # %% [markdown]
 # ## Setup: mesh, data, and fields on the mesh
 #
-# We load the mesh that notebook 1 wrote — with its **tag 1 = inflow**, **tag 2 =
-# calving front** boundary convention — then interpolate each gridded field onto
-# it. `Q` is the scalar space we invert in (one value of $\theta$ and $\varphi$
-# per vertex); `V` is the vector space for the velocity.
+# We load the mesh that notebook 1 wrote — with its **tag 1 = inflow**, **tag 2 = calving front** boundary convention — then interpolate each gridded field onto it. `Q` is the scalar space we invert in (one value of $\theta$ and $\varphi$ per vertex); `V` is the vector space for the velocity.
 
 # %%
 import sys, os
@@ -73,9 +66,7 @@ u_obs.sub(1).assign(nt.interpolate_field(ds, "vy", Q))
 # %% [markdown]
 # ### Observational uncertainty
 #
-# We weight the data misfit by the per-pixel velocity error $\sigma$ (so
-# well-measured fast ice counts more than noisy slow ice). We take it from the
-# MEaSUREs error fields, floored at 1 m/yr.
+# We weight the data misfit by the per-pixel velocity error $\sigma$ (so well-measured velocities count more than noisy velocities measurements) taken from the MEaSUREs error fields, floored at 1 m/yr.
 
 # %%
 sigma_x = Function(Q, name="sigma_x").interpolate(
@@ -96,18 +87,12 @@ sigma_y = Function(Q, name="sigma_y").interpolate(
 #
 # ### Friction and the flotation criterion
 #
-# Basal friction only acts where the ice is **grounded**. Approaching the
-# grounding line the bed drops below sea level, sea water pressurises the base,
-# and the effective pressure falls to zero at flotation:
+# Basal friction only acts where the ice is **grounded**. Approaching the grounding line the bed drops below sea level, and the effective pressure falls to zero at flotation:
 #
 # $$ p_W = \rho_W g\max(0,\,h-s),\quad p_I=\rho_I g\,h,\quad
 #    \phi = 1-\frac{p_W}{p_I}. $$
 #
-# We multiply the basal drag by the **grounded fraction** $\phi$ (1 grounded,
-# $\to 0$ at flotation), so friction vanishes under the shelf — the icepack
-# tutorials' water-pressure friction. We also multiply the *control* $\theta$ by
-# a hard grounded mask, so the optimiser only adjusts friction where it can
-# actually matter.
+# We multiply the basal drag by the **grounded fraction** $\phi$ (1 grounded, $\to 0$ at flotation), so friction vanishes under the shelf. We also multiply the *control* $\theta$ by a hard grounded mask, so the optimiser only adjusts friction where the ice is grounded.
 
 # %%
 grounded = nt.grounded_mask(h, s, Q)
@@ -141,9 +126,9 @@ print(f"prior modelled u_max = "
       f"{float(Function(Q).interpolate(sqrt(inner(u_prior, u_prior))).dat.data_ro.max()):.0f} m/yr")
 
 # %% [markdown]
-# ## The inverse problem (Recinos et al., 2023)
+# ## The inverse problem
 #
-# We minimise a cost made of a **data-misfit** term and a **prior** (regulariser):
+# We minimise an objective functional that represents the **model-data-misfit** term and a **prior** (regulariser):
 #
 # $$
 # J = \underbrace{\tfrac12\!\int \Big[\big(\tfrac{u-u_\text{obs}}{\sigma_u}\big)^2
@@ -153,12 +138,10 @@ print(f"prior modelled u_max = "
 #   \qquad \gamma=\delta\,\ell^2 .
 # $$
 #
-# The prior keeps the controls smooth (correlation length $\ell$) and pulls them
-# toward zero (amplitude penalty $\delta$); $\lambda$ trades data-fit against
-# smoothness. In a production run you would scan $\lambda$ (an *L-curve*) to pick
-# the trade-off; here we fix one sensible value to keep things short.
+# The prior keeps the controls smooth (correlation length $\ell$) and pulls them toward zero (amplitude penalty $\delta$); $\lambda$ trades data-fit against
+# smoothness.
 #
-# icepack wants these as three plain functions: `simulation` (above),
+# icepack reads these functions and assigns them to the statistics problem by defining: `simulation` (above),
 # `loss_functional` (the misfit integrand), and `regularization`.
 
 # %%
@@ -178,11 +161,8 @@ def regularization(controls):
 # %% [markdown]
 # ### Run the optimisation
 #
-# `StatisticsProblem` ties the three pieces to the two controls;
-# `MaximumProbabilityEstimator` then drives the cost downhill from
-# $\theta=\varphi=0$ using a Newton/BFGS optimiser, getting the gradient by the
-# adjoint method (one extra solve per iteration, *regardless* of how many DOFs).
-# On this coarse mesh a few dozen iterations is plenty.
+# `StatisticsProblem` ties the three pieces to the two controls; `MaximumProbabilityEstimator` then drives the cost downhill from $\theta=\varphi=0$ using a Newton/BFGS optimiser, getting the gradient by the adjoint method (one extra solve per iteration, *regardless* of how many DOFs).
+# Here we allow up to 300 iterations so the optimiser can converge properly.
 
 # %%
 theta = Function(Q, name="log_friction")
@@ -195,7 +175,7 @@ problem = StatisticsProblem(
     controls=[theta, phi],
 )
 estimator = MaximumProbabilityEstimator(
-    problem, gradient_tolerance=1e-4, step_tolerance=1e-2, max_iterations=40,
+    problem, gradient_tolerance=1e-4, step_tolerance=1e-2, max_iterations=300,
 )
 theta, phi = estimator.solve()
 
@@ -276,8 +256,9 @@ with fd.CheckpointFile("../output/inversion.h5", "w") as chk:
 print("saved ../output/inversion.h5")
 
 # %% [markdown]
-# We have a friction and fluidity map that reproduces the observed flow — but how
-# *well-constrained* is it? Where did the data actually pin the controls down, and
-# where are we just believing the prior? That is the job of the last notebook.
+# We have a friction and fluidity map that reproduces the observed flow — but how *well-constrained* is it? Where did the data actually pin the controls down, and where are we just believing the prior? That is the job of the next notebook.
 #
 # ➡️ Continue with [`02-uncertainty.ipynb`](02-uncertainty.ipynb).
+
+# %% [markdown]
+#

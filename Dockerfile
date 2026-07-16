@@ -25,10 +25,30 @@ FROM --platform=linux/amd64 firedrakeproject/firedrake-vanilla:${FIREDRAKE_TAG}
 SHELL ["/bin/bash", "-c"]
 
 # gmsh (the mesh generator the meshing helper drives) + patchelf (fixes binary
-# wheel RPATHs), installed via apt as in the icepack install guide.
+# wheel RPATHs), installed via apt as in the icepack install guide. g++ and git
+# additionally build the Fill-Spill-Merge routing engine (next stage).
 RUN sudo apt-get update \
- && sudo apt-get install -y --no-install-recommends patchelf gmsh \
+ && sudo apt-get install -y --no-install-recommends patchelf gmsh g++ git \
  && sudo rm -rf /var/lib/apt/lists/*
+
+# --- Fill-Spill-Merge meltwater routing (Barnes et al., 2020) -----------------
+# The melt-sensitivity notebook routes surface meltwater downslope with
+# Fill-Spill-Merge. The upstream RichDEM / dephier / FSM libraries are
+# header-only (MIT); we clone them at a pinned commit and compile our small
+# raw-binary CLI wrapper (fsm/fsm_wrapper.cpp) against them, leaving the
+# `fsm_wrapper` binary on PATH. I/O is raw float64, so there is nothing to link.
+COPY fsm/fsm_wrapper.cpp /tmp/fsm/fsm_wrapper.cpp
+ARG FSM_COMMIT=1c499ea475c09b9f4c5da74ee5cc995de169db63
+RUN git clone https://github.com/r-barnes/Barnes2020-FillSpillMerge.git /tmp/fsm-src \
+ && git -C /tmp/fsm-src checkout ${FSM_COMMIT} \
+ && git -C /tmp/fsm-src submodule update --init --recursive \
+ && g++ -O2 -std=c++17 \
+        -I/tmp/fsm-src/include \
+        -I/tmp/fsm-src/submodules/dephier/include \
+        -I/tmp/fsm-src/submodules/dephier/submodules/richdem/include \
+        -o /tmp/fsm_wrapper /tmp/fsm/fsm_wrapper.cpp \
+ && sudo mv /tmp/fsm_wrapper /usr/local/bin/fsm_wrapper \
+ && sudo rm -rf /tmp/fsm-src /tmp/fsm
 
 # --- Ice-flow / adjoint stack -------------------------------------------------
 # icepack builds on the pyadjoint already in the image and pulls in the gmsh
