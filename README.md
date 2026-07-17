@@ -34,7 +34,10 @@ nivlisen-tutorials/
 │   ├── nivlisen_ice_domain.gpkg  pre-carved ice-only domain (calving front)
 │   └── prepare_data.py      (author-side) how the small data were made
 ├── src/nivlisen_tutorial.py shared helpers (data, mesh, prior, model, plots)
-├── fsm/fsm_wrapper.cpp      Fill-Spill-Merge meltwater routing (compiled into the image)
+├── fsm/                     Fill-Spill-Merge meltwater routing (notebook 03)
+│   ├── fsm_wrapper.cpp       single-shot routing CLI
+│   ├── fsm_batch.cpp         streaming batch CLI (used by FSMRouter)
+│   └── build_fsm.sh          builds both CLIs for the no-Docker path
 ├── mesh/                    meshes written by notebook 00
 └── notebooks/               00-domain, 01-inversion, 02-uncertainty, 03-melt-flux, 04-figures
 ```
@@ -144,14 +147,41 @@ JupyterLab, …):
 pip install -r requirements.txt
 ```
 
-**3. Launch JupyterLab** from the repository root (`OMP_NUM_THREADS=1` avoids
+**3. Build the Fill-Spill-Merge routing binaries** - *only needed for notebook
+03* (`03-melt-flux`), which routes surface meltwater downslope with
+Fill-Spill-Merge (Barnes et al., 2020). Notebooks 00-02 and 04 run without it,
+so you can defer this until you reach notebook 03. With the Firedrake venv from
+step 1 still active, run the bundled script from the repository root:
+
+```bash
+fsm/build_fsm.sh
+```
+
+It clones the header-only upstream libraries at a pinned commit into a temporary
+directory, compiles the two small CLIs (`fsm_wrapper` and `fsm_batch`) against
+them with your default C++ compiler - stock **Apple clang** on macOS or **g++**
+on Linux, needing no CMake, GDAL, OpenMP or Homebrew LLVM - then installs them
+into the active venv's `bin/` (already on your `PATH`) and deletes the clone.
+Notebook 03 locates them on `PATH` with `shutil.which`. If no virtualenv is
+active the script instead drops them in `fsm/bin/` and prints the single
+`export PATH=...` line to add. All it needs is a C++ compiler (`xcode-select
+--install` on macOS; `g++` on Linux) and `git`.
+
+> **Do not follow the upstream Fill-Spill-Merge repository's own build
+> instructions for this.** Their macOS recipe points CMake at a hardcoded,
+> now-stale Homebrew LLVM path and pulls in GDAL, `libomp` and an old macOS SDK,
+> and it never says where to install the result - which is why it does not run
+> cleanly under the clang that ships with the Xcode Command Line Tools. Our two
+> CLIs need none of that machinery, and `fsm/build_fsm.sh` is the whole story.
+
+**4. Launch JupyterLab** from the repository root (`OMP_NUM_THREADS=1` avoids
 thread oversubscription on serial runs):
 
 ```bash
 OMP_NUM_THREADS=1 jupyter lab
 ```
 
-**4. Open JupyterLab** at <http://localhost:8888> (it usually opens your browser
+**5. Open JupyterLab** at <http://localhost:8888> (it usually opens your browser
 for you) and run the notebooks in order, starting with
 `notebooks/00-domain.ipynb`.
 

@@ -3,8 +3,12 @@ output/*.h5
 output/*.json
 output/figures/
 mesh/*.msh
+# locally-built Fill-Spill-Merge binaries (see fsm/build_fsm.sh)
+fsm/bin/
 # python / jupyter cruft
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .virtual_documents/
+# macOS Finder cruft
+.DS_Store
